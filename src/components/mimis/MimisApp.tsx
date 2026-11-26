@@ -29,6 +29,7 @@ import {
   WalletCards,
   X,
 } from 'lucide-react'
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -56,7 +57,15 @@ import {
   NAVIGATION,
   ORDER_STATUSES,
 } from './constants'
-import { Mannequin } from './Mannequin'
+// three.js only loads on the measurement page, and only in the browser.
+const Mannequin = dynamic(() => import('./Mannequin').then((m) => m.Mannequin), {
+  ssr: false,
+  loading: () => (
+    <div className="grid h-[560px] place-items-center rounded-[22px] border border-[#dfd2c5] bg-[#fcf8f3] text-sm text-[#806f63]">
+      Loading 3D fit preview…
+    </div>
+  ),
+})
 
 type View =
   | 'dashboard'
@@ -457,6 +466,7 @@ export default function MimisApp({ view }: { view: View }) {
   const [detailPage, setDetailPage] = useState(1)
   const [calendarMonth, setCalendarMonth] = useState(() => new Date())
   const [orderMode, setOrderMode] = useState<'personal' | 'bulk'>('personal')
+  const [activeMeasurement, setActiveMeasurement] = useState<string | null>(null)
   const [measurementDraft, setMeasurementDraft] = useState({
     customerId: '',
     category: 'Tops',
@@ -2552,6 +2562,9 @@ export default function MimisApp({ view }: { view: View }) {
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {relevantFields.map((key) => {
                   const limit = MEASUREMENT_LIMITS[key]
+                  const raw = measurementDraft.values[key] || ''
+                  const outOfRange =
+                    raw !== '' && !(Number(raw) >= limit.min && Number(raw) <= limit.max)
                   return (
                     <Field key={key} label={`${fieldLabel(key)} (in)`}>
                       <input
@@ -2560,15 +2573,26 @@ export default function MimisApp({ view }: { view: View }) {
                         max={limit.max}
                         step="0.1"
                         required={limit.required}
-                        value={measurementDraft.values[key] || ''}
+                        value={raw}
+                        aria-invalid={outOfRange}
+                        onFocus={() => setActiveMeasurement(key)}
                         onChange={(event) =>
                           setMeasurementDraft((draft) => ({
                             ...draft,
                             values: { ...draft.values, [key]: event.target.value },
                           }))
                         }
-                        placeholder={`${limit.min}–${limit.max}${limit.required ? ' · Required' : ''}`}
+                        placeholder={
+                          key === 'height'
+                            ? `${limit.min}–${limit.max} · Optional, 3D preview`
+                            : `${limit.min}–${limit.max}${limit.required ? ' · Required' : ''}`
+                        }
                       />
+                      {outOfRange && (
+                        <span className="text-xs font-normal text-[#a4432f]">
+                          Use {limit.min}–{limit.max} in. The preview stops at the nearest limit.
+                        </span>
+                      )}
                     </Field>
                   )
                 })}
@@ -2671,7 +2695,12 @@ export default function MimisApp({ view }: { view: View }) {
             </section>
           </div>
           <div className="space-y-5 xl:sticky xl:top-24 xl:self-start">
-            <Mannequin state={previewState} />
+            <Mannequin
+              state={previewState}
+              activeField={
+                relevantFields.includes(activeMeasurement ?? '') ? activeMeasurement : null
+              }
+            />
             <section className="panel">
               <div className="panel-heading">
                 <div>

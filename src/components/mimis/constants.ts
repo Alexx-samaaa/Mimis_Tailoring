@@ -28,6 +28,7 @@ export const GARMENTS: Record<string, string[]> = {
 
 export const MEASUREMENT_LIMITS: Record<string, { min: number; max: number; required?: boolean }> =
   {
+    height: { min: 36, max: 90 },
     bust: { min: 18, max: 80, required: true },
     chest: { min: 18, max: 80, required: true },
     waist: { min: 15, max: 75, required: true },
@@ -70,7 +71,9 @@ export function measurementFieldsFor(category: string, garmentType: string, slee
     fields =
       garmentType === 'Formal trousers'
         ? ['waist', 'hips', 'thigh', 'frontRise', 'inseam', 'outseam']
-        : ['chest', 'shoulder', 'waist', 'hips', 'armhole', 'sleeveLength']
+        : garmentType === 'Vest'
+          ? ['chest', 'shoulder', 'waist', 'hips', 'armhole']
+          : ['chest', 'shoulder', 'waist', 'hips', 'armhole', 'sleeveLength']
   } else {
     fields =
       garmentType === 'Jumpsuit' || garmentType === 'Romper'
@@ -78,6 +81,8 @@ export function measurementFieldsFor(category: string, garmentType: string, slee
         : ['bust', 'shoulder', 'waist', 'hips', 'fullLength']
   }
 
+  // Height sizes the 3D mannequin, so every garment collects it.
+  fields = ['height', ...fields]
   return sleeveStyle === 'Sleeveless' ? fields.filter((field) => field !== 'sleeveLength') : fields
 }
 
