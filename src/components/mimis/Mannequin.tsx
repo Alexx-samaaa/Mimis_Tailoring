@@ -1,6 +1,6 @@
 'use client'
 
-import { Html, Line, OrbitControls } from '@react-three/drei'
+import { Line, OrbitControls } from '@react-three/drei'
 import { Canvas } from '@react-three/fiber'
 import { type ComponentRef, useEffect, useMemo, useRef, useState } from 'react'
 import { BufferGeometry, DoubleSide, Float32BufferAttribute } from 'three'
@@ -67,7 +67,9 @@ function PieceMesh({ piece, lit }: { piece: Piece; lit: boolean }) {
   const mesh = (
     <mesh geometry={geometry}>
       <meshStandardMaterial
-        color={lit ? COLORS.accent : COLORS[piece.role]}
+        color={COLORS[piece.role]}
+        emissive={COLORS.accent}
+        emissiveIntensity={lit ? 0.28 : 0}
         side={DoubleSide}
         roughness={0.85}
         transparent={sheer}
@@ -83,35 +85,16 @@ function PieceMesh({ piece, lit }: { piece: Piece; lit: boolean }) {
   )
 }
 
-function DimMarker({ dim, label }: { dim: Dim; label: string }) {
-  let points: Vec3[]
-  let labelAt: Vec3
-  if (dim.kind === 'line') {
-    points = [dim.from, dim.to]
-    labelAt = dim.from.map((n, i) => (n + dim.to[i]) / 2) as Vec3
-  } else {
-    const { y, rx, rz } = dim.ring
-    points = Array.from({ length: 65 }, (_, i) => {
-      const t = (i / 64) * Math.PI * 2
-      return [rx * Math.sin(t), y, rz * Math.cos(t)] as Vec3
-    })
-    labelAt = [rx + 0.6, y, 0]
-  }
+function DimMarker({ dim }: { dim: Dim }) {
+  const points: Vec3[] =
+    dim.kind === 'line'
+      ? [dim.from, dim.to]
+      : Array.from({ length: 65 }, (_, i) => {
+          const t = (i / 64) * Math.PI * 2
+          return [dim.ring.rx * Math.sin(t), dim.ring.y, dim.ring.rz * Math.cos(t)]
+        })
   const marker = (
-    <>
-      <Line
-        points={points}
-        color={COLORS.accent}
-        lineWidth={3}
-        depthTest={false}
-        renderOrder={10}
-      />
-      <Html position={labelAt} center style={{ pointerEvents: 'none' }} zIndexRange={[20, 0]}>
-        <span className="whitespace-nowrap rounded-full bg-[#2e1d12]/85 px-2.5 py-1 text-[11px] font-semibold text-white shadow">
-          {label}
-        </span>
-      </Html>
-    </>
+    <Line points={points} color={COLORS.accent} lineWidth={3} depthTest={false} renderOrder={10} />
   )
   if (!dim.frame) return marker
   return (
@@ -224,7 +207,7 @@ export function Mannequin({
               <cylinderGeometry args={[fit.standRadius, fit.standRadius + 0.6, 0.7, 48]} />
               <meshStandardMaterial color="#5c3d28" roughness={0.6} />
             </mesh>
-            {dim && <DimMarker dim={dim} label={dimLabel} />}
+            {dim && <DimMarker dim={dim} />}
             <OrbitControls
               ref={controls}
               target={[0, height * 0.5, 0]}
@@ -238,6 +221,12 @@ export function Mannequin({
           <p className="grid h-full place-items-center px-6 text-center text-sm text-[#806f63]">
             3D preview is not supported on this device. Measurements still save normally.
           </p>
+        )}
+        {webgl && dim && (
+          <span className="pointer-events-none absolute left-3 top-3 rounded-full bg-[#2e1d12]/85 px-3 py-1 text-xs font-semibold text-white shadow">
+            <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-[#d9822b]" />
+            {dimLabel}
+          </span>
         )}
         {webgl && (
           <div className="absolute inset-x-0 bottom-3 flex justify-center gap-2">

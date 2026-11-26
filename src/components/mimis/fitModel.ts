@@ -272,7 +272,7 @@ export function buildFit({ category, garmentType, values: v, options: o }: FitIn
 
   const floorHem = (y: number, what: string) => {
     if (y >= 0.6) return y
-    notes.push(`${what} runs past the floor, so the preview stops the hem at the floor.`)
+    notes.push(`${what}: the hem would fall below the floor, so the preview stops it at the floor.`)
     return 0.6
   }
 
@@ -293,7 +293,7 @@ export function buildFit({ category, garmentType, values: v, options: o }: FitIn
     if (hem > max) {
       hem = max
       notes.push(
-        `${what} is too short to show below the crotch, so the preview shows the shortest leg.`,
+        `${what}: the leg would end above the crotch, so the preview shows the shortest leg.`,
       )
     }
     return floorHem(hem, what)
@@ -353,11 +353,11 @@ export function buildFit({ category, garmentType, values: v, options: o }: FitIn
       frame: armFrame(side),
       fields: ['armhole'],
       profile: [
-        { y: -1, rx: holeR + g, rz: (holeR + g) * 0.95 },
-        { y: 0.6, rx: holeR + g, rz: (holeR + g) * 0.95 },
+        { y: -2.1, rx: holeR + g, rz: (holeR + g) * 0.95 },
+        { y: -0.7, rx: holeR + g, rz: (holeR + g) * 0.95 },
       ],
-      bottom: flat(-0.9),
-      top: flat(0.5),
+      bottom: flat(-2),
+      top: flat(-0.8),
     }))
   const used: Record<string, number> = {}
   const sleeves = (
@@ -388,14 +388,18 @@ export function buildFit({ category, garmentType, values: v, options: o }: FitIn
       notes.push('Sleeve length is short for a long sleeve; the preview follows the measurement.')
     if (length !== undefined && style === 'Short sleeve' && length > armLen * 0.6)
       notes.push('Sleeve length is long for a short sleeve; the preview follows the measurement.')
+    // A normal sleeve closes in a rounded cap over the shoulder; off-shoulder sleeves start lower, open.
     const capTop = capLow ? -2.6 : 1.4
-    len = Math.max(len, 1 - capTop)
+    len = Math.max(len, capLow ? 3.6 : 1)
     used.sleeveLength = len
-    const profile = trace(-len - 0.1, capTop + 0.1, (y) => {
+    const profile = trace(-len - 0.1, capTop, (y) => {
       const a = sample(arm, y)
       const u = clamp(-y / len, 0, 1)
       let r = lerp(holeR, a.rx, clamp(-y / 7, 0, 1)) + g
-      if (y > 0) r *= 1 - 0.3 * smooth(Math.min(1, y / 1.6))
+      if (!capLow && y > 0) {
+        const k = Math.sqrt(Math.max(0, 1 - (y / capTop) ** 2))
+        return { rx: r * k, rz: r * 0.95 * k }
+      }
       if (style === 'Puff sleeve') r += 1.7 * Math.sin(Math.PI * u)
       if (style === 'Bell sleeve') r += 3 * u * u
       if (style === 'Short sleeve') r += 0.5 * u * u // short sleeves open slightly at the hem
@@ -507,7 +511,15 @@ export function buildFit({ category, garmentType, values: v, options: o }: FitIn
         gap
       return { rx: Math.max(body.rx + gap, want), rz: Math.max(body.rz + gap, want) }
     }
+    // Crotch panel: fills the notch where the two leg tubes meet, so the body never shows there.
+    const gusset = ball('pants-gusset', 'cloth', [0, crotchY - 0.2, 0], 1.4)
+    gusset.profile = gusset.profile.map((r) => ({
+      y: r.y,
+      rx: (r.rx / 1.4) * legX * 1.1,
+      rz: (r.rz / 1.4) * (hipR.rz + gap - 0.1),
+    }))
     return [
+      gusset,
       {
         key: 'pants-seat',
         role: 'cloth' as const,
@@ -788,7 +800,7 @@ export function buildFit({ category, garmentType, values: v, options: o }: FitIn
     },
     armhole: {
       kind: 'ring',
-      ring: { y: 0, rx: holeR + gap + 0.5, rz: (holeR + gap + 0.5) * 0.95 },
+      ring: { y: -1.4, rx: holeR + gap + 0.5, rz: (holeR + gap + 0.5) * 0.95 },
       frame: armFrame(1),
     },
     shoulder: {
