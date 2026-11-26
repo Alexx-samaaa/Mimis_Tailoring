@@ -1,5 +1,17 @@
 'use client'
 
+import { Html, Line, OrbitControls } from '@react-three/drei'
+import { Canvas } from '@react-three/fiber'
+import { type ComponentRef, useEffect, useMemo, useRef, useState } from 'react'
+import { BufferGeometry, DoubleSide, Float32BufferAttribute } from 'three'
+import {
+  MEASUREMENT_LIMITS,
+  customizationFieldsFor,
+  fieldLabel,
+  measurementFieldsFor,
+} from './constants'
+import { type Dim, type Piece, type Role, type Vec3, buildFit, sample } from './fitModel'
+
 type MannequinState = {
   category: string
   garmentType: string
@@ -7,252 +19,251 @@ type MannequinState = {
   customizations: Record<string, string | string[]>
 }
 
-export function Mannequin({ state }: { state: MannequinState }) {
-  const m = state.measurements || {}
-  const cust = state.customizations || {}
-  const value = (key: string, fallback: number) => Number(m[key]) || fallback
-  const option = (key: string, fallback: string) =>
-    typeof cust[key] === 'string' ? (cust[key] as string) : fallback
+const COLORS: Record<Role | 'accent', string> = {
+  skin: '#efe5da',
+  cloth: '#7f6a5b',
+  sheer: '#d8c8ad',
+  shirt: '#f7f3ee',
+  trim: '#5d4738',
+  accent: '#d9822b',
+}
+const COLUMNS = 48
 
-  const bust = value('bust', 34)
-  const waist = value('waist', 28)
-  const hips = value('hips', 36)
-  const shoulder = value('shoulder', 15)
-  const sleeveStyle = option('sleeveStyle', 'Short sleeve')
-  const necklineStyle = option('necklineStyle', 'Round neck')
-  const backStyle = option('backStyle', 'Regular back')
-  const fitStyle = option('fitStyle', 'Regular fit')
-  const silhouette = option('garmentSilhouette', 'A-line')
-  const sleeveLength = value(
-    'sleeveLength',
-    sleeveStyle === 'Long sleeve' ? 22 : sleeveStyle === 'Sleeveless' ? 0 : 8,
+// Turns a fitModel tube into a mesh: one vertex column per angle, rows between bottom and top.
+function tubeGeometry(piece: Piece) {
+  const angles = Array.from({ length: COLUMNS }, (_, i) => (i / COLUMNS) * Math.PI * 2)
+  const span = Math.max(...angles.map((t) => piece.top(t) - piece.bottom(t)))
+  const rows = Math.min(220, Math.max(6, Math.ceil(span / 0.5)))
+  const positions: number[] = []
+  for (const t of angles) {
+    const lo = piece.bottom(t)
+    const hi = piece.top(t)
+    for (let j = 0; j <= rows; j++) {
+      const y = lo + ((hi - lo) * j) / rows
+      const r = sample(piece.profile, y)
+      positions.push(r.rx * Math.sin(t), y, r.rz * Math.cos(t))
+    }
+  }
+  const index: number[] = []
+  for (let i = 0; i < COLUMNS; i++) {
+    const next = (i + 1) % COLUMNS
+    for (let j = 0; j < rows; j++) {
+      const a = i * (rows + 1) + j
+      const b = next * (rows + 1) + j
+      index.push(a, b, a + 1, b, b + 1, a + 1)
+    }
+  }
+  const geometry = new BufferGeometry()
+  geometry.setAttribute('position', new Float32BufferAttribute(positions, 3))
+  geometry.setIndex(index)
+  geometry.computeVertexNormals()
+  return geometry
+}
+
+function PieceMesh({ piece, lit }: { piece: Piece; lit: boolean }) {
+  const geometry = useMemo(() => tubeGeometry(piece), [piece])
+  useEffect(() => () => geometry.dispose(), [geometry])
+  const sheer = piece.role === 'sheer'
+  const mesh = (
+    <mesh geometry={geometry}>
+      <meshStandardMaterial
+        color={lit ? COLORS.accent : COLORS[piece.role]}
+        side={DoubleSide}
+        roughness={0.85}
+        transparent={sheer}
+        opacity={sheer ? 0.82 : 1}
+      />
+    </mesh>
   )
-  const fitFactor =
-    fitStyle === 'Fitted'
-      ? 0.92
-      : fitStyle === 'Loose fit'
-        ? 1.1
-        : fitStyle === 'Oversized'
-          ? 1.25
-          : 1
-  const shoulderWidth = Math.min(Math.max(shoulder * 5.5 * fitFactor, 50), 140)
-  const bustRx = Math.min(Math.max(bust * 1.15 * fitFactor, 25), 72)
-  const waistRx = Math.min(Math.max(waist * 1.15 * fitFactor, 20), 62)
-  const hipsRx = Math.min(Math.max(hips * 1.15 * fitFactor, 25), 75)
-  const sleeveVisual = Math.min(Math.max(sleeveLength * 4.5, 15), 160)
-  const garment = state.garmentType.toLowerCase()
-  const isBlazerOrSuit = garment.includes('blazer') || garment === 'suit'
-  const isBarong = garment.includes('barong')
-  const isVest = garment.includes('vest')
-  const isFormalTop = isBlazerOrSuit || isBarong || isVest
-  const isBottom = state.category === 'Bottoms'
-  const isPants =
-    garment.includes('pant') ||
-    garment.includes('trouser') ||
-    garment.includes('jean') ||
-    garment.includes('short')
-  const isDress =
-    state.category === 'Dresses and Gowns' ||
-    garment.includes('dress') ||
-    garment.includes('gown') ||
-    garment.includes('jumpsuit')
+  if (!piece.frame) return mesh
+  return (
+    <group position={piece.frame.at} rotation={[0, 0, piece.frame.tiltZ]}>
+      {mesh}
+    </group>
+  )
+}
 
-  const neckline = () => {
-    if (necklineStyle.includes('V-neck'))
-      return (
-        <path d="M 140 70 L 160 106 L 180 70 Z" fill="#f7efe7" stroke="#49382d" strokeWidth="1.5" />
-      )
-    if (necklineStyle === 'Square neck')
-      return (
-        <path
-          d="M 142 70 L 142 98 L 178 98 L 178 70 Z"
-          fill="#f7efe7"
-          stroke="#49382d"
-          strokeWidth="1.5"
-        />
-      )
-    if (necklineStyle === 'Sweetheart neckline')
-      return (
-        <path
-          d="M 140 70 Q 150 95 160 85 Q 170 95 180 70 Z"
-          fill="#f7efe7"
-          stroke="#49382d"
-          strokeWidth="1.5"
-        />
-      )
-    if (necklineStyle === 'Off-shoulder')
-      return (
-        <path
-          d="M 120 82 Q 160 95 200 82 L 200 70 L 120 70 Z"
-          fill="#f7efe7"
-          stroke="#49382d"
-          strokeWidth="1.5"
-        />
-      )
-    if (['Boat neck', 'Scoop neck'].includes(necklineStyle))
-      return (
-        <ellipse
-          cx="160"
-          cy="74"
-          rx="26"
-          ry="14"
-          fill="#f7efe7"
-          stroke="#49382d"
-          strokeWidth="1.5"
-        />
-      )
-    return null
+function DimMarker({ dim, label }: { dim: Dim; label: string }) {
+  let points: Vec3[]
+  let labelAt: Vec3
+  if (dim.kind === 'line') {
+    points = [dim.from, dim.to]
+    labelAt = dim.from.map((n, i) => (n + dim.to[i]) / 2) as Vec3
+  } else {
+    const { y, rx, rz } = dim.ring
+    points = Array.from({ length: 65 }, (_, i) => {
+      const t = (i / 64) * Math.PI * 2
+      return [rx * Math.sin(t), y, rz * Math.cos(t)] as Vec3
+    })
+    labelAt = [rx + 0.6, y, 0]
   }
+  const marker = (
+    <>
+      <Line
+        points={points}
+        color={COLORS.accent}
+        lineWidth={3}
+        depthTest={false}
+        renderOrder={10}
+      />
+      <Html position={labelAt} center style={{ pointerEvents: 'none' }} zIndexRange={[20, 0]}>
+        <span className="whitespace-nowrap rounded-full bg-[#2e1d12]/85 px-2.5 py-1 text-[11px] font-semibold text-white shadow">
+          {label}
+        </span>
+      </Html>
+    </>
+  )
+  if (!dim.frame) return marker
+  return (
+    <group position={dim.frame.at} rotation={[0, 0, dim.frame.tiltZ]}>
+      {marker}
+    </group>
+  )
+}
 
-  const sleeves = () => {
-    if (sleeveStyle === 'Sleeveless' || isVest) return null
-    const visualLength = isBarong || isBlazerOrSuit ? Math.max(sleeveVisual, 120) : sleeveVisual
-    if (sleeveStyle === 'Puff sleeve')
-      return (
-        <g>
-          <circle cx={160 - shoulderWidth / 2 - 6} cy="82" r="14" fill="#79563f" stroke="#2e1d12" />
-          <circle cx={160 + shoulderWidth / 2 + 6} cy="82" r="14" fill="#79563f" stroke="#2e1d12" />
-        </g>
-      )
-    return (
-      <g>
-        <path
-          d={`M ${160 - shoulderWidth / 2 - 4} 70 L ${160 - shoulderWidth / 2 - visualLength * 0.4} ${70 + visualLength} L ${160 - shoulderWidth / 2 - visualLength * 0.4 + 14} ${85 + visualLength} L ${160 - shoulderWidth / 2 - 4} 100 Z`}
-          fill="#79563f"
-          stroke="#2e1d12"
-          strokeWidth="1.5"
-        />
-        <path
-          d={`M ${160 + shoulderWidth / 2 + 4} 70 L ${160 + shoulderWidth / 2 + visualLength * 0.4} ${70 + visualLength} L ${160 + shoulderWidth / 2 + visualLength * 0.4 - 14} ${85 + visualLength} L ${160 + shoulderWidth / 2 + 4} 100 Z`}
-          fill="#79563f"
-          stroke="#2e1d12"
-          strokeWidth="1.5"
-        />
-      </g>
+const canUseWebGL = () => {
+  try {
+    const canvas = document.createElement('canvas')
+    return Boolean(canvas.getContext('webgl2') || canvas.getContext('webgl'))
+  } catch {
+    return false
+  }
+}
+
+export function Mannequin({
+  state,
+  activeField = null,
+}: {
+  state: MannequinState
+  activeField?: string | null
+}) {
+  const [webgl] = useState(canUseWebGL)
+  const controls = useRef<ComponentRef<typeof OrbitControls>>(null)
+
+  const { fit, entered } = useMemo(() => {
+    const options = Object.fromEntries(
+      Object.entries(customizationFieldsFor(state.category, state.garmentType))
+        .filter(([, applies]) => applies)
+        .map(([key]) => [key, String(state.customizations[key] ?? '') || undefined]),
     )
+    // Only the fields this garment collects, clamped to the form's limits so the preview never breaks.
+    const values: Record<string, number> = {}
+    for (const key of measurementFieldsFor(
+      state.category,
+      state.garmentType,
+      options.sleeveStyle,
+    )) {
+      const raw = state.measurements[key]
+      const number = Number(raw)
+      const limit = MEASUREMENT_LIMITS[key]
+      if (raw === '' || raw === undefined || !Number.isFinite(number) || !limit) continue
+      values[key] = Math.min(limit.max, Math.max(limit.min, number))
+    }
+    return {
+      fit: buildFit({ category: state.category, garmentType: state.garmentType, values, options }),
+      entered: values,
+    }
+    // Keyed on content: the parent rebuilds `state` on every render, geometry should only follow edits.
+  }, [
+    state.category,
+    state.garmentType,
+    JSON.stringify(state.measurements),
+    JSON.stringify(state.customizations),
+  ])
+
+  const height = fit.height
+  const view = (side: 'front' | 'side' | 'back') => {
+    const orbit = controls.current
+    if (!orbit) return
+    const distance = height * 2.15
+    const [x, z] =
+      side === 'front' ? [0, distance] : side === 'side' ? [distance, 0] : [0, -distance]
+    orbit.object.position.set(x, height * 0.55, z)
+    orbit.target.set(0, height * 0.5, 0)
+    orbit.update()
   }
+
+  const dim = activeField ? fit.dims[activeField] : undefined
+  const dimLabel = activeField
+    ? `${fieldLabel(activeField)} · ${
+        entered[activeField] !== undefined
+          ? `${entered[activeField]} in`
+          : `${(fit.used[activeField] ?? 0).toFixed(1)} in (not entered)`
+      }`
+    : ''
 
   return (
     <div className="rounded-[22px] border border-[#dfd2c5] bg-[#fcf8f3] p-4">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <span className="rounded-full bg-[#e9ddd2] px-3 py-1 text-[10px] font-bold tracking-[.14em] text-[#6f4e3a]">
-          REAL-TIME FIT STUDIO
+          3D FIT STUDIO
         </span>
         <span className="text-xs text-[#806f63]">
-          {state.garmentType || 'Custom garment'} · {waist}&quot; waist
+          {state.garmentType || 'Custom garment'} · {height.toFixed(0)}&quot; tall
+          {entered.height === undefined ? ' (default)' : ''}
         </span>
       </div>
-      <svg
-        aria-label="Mimi's interactive garment mannequin"
-        className="mx-auto h-[430px] w-full max-w-[330px]"
-        viewBox="0 0 320 440"
-      >
-        <rect x="156" y="20" width="8" height="400" fill="#927d6e" rx="4" />
-        <path d="M 120 415 Q 160 395 200 415 L 190 425 Q 160 408 130 425 Z" fill="#5c3d28" />
-        <path
-          d={`M ${160 - shoulderWidth / 2} 70 Q 160 80 ${160 + shoulderWidth / 2} 70 Q ${160 + bustRx} 110 ${160 + waistRx} 160 Q ${160 + hipsRx} 210 ${160 + hipsRx - 10} 260 L ${160 - (hipsRx - 10)} 260 Q ${160 - hipsRx} 210 ${160 - waistRx} 160 Q ${160 - bustRx} 110 ${160 - shoulderWidth / 2} 70 Z`}
-          fill="#eadfd5"
-          stroke="#b18b6c"
-          strokeWidth="2"
-        />
-        <rect x="148" y="42" width="24" height="28" fill="#d0bfb0" rx="4" />
-        <ellipse cx="160" cy="42" rx="14" ry="6" fill="#8b654b" />
-        {!isBottom && (
-          <g>
-            <path
-              d={`M ${160 - shoulderWidth / 2 - 4} 70 Q 160 86 ${160 + shoulderWidth / 2 + 4} 70 L ${160 + shoulderWidth / 2 + 4} 110 Q ${160 + bustRx + 4} 130 ${160 + waistRx + 4} 160 L ${160 - waistRx - 4} 160 Q ${160 - bustRx - 4} 130 ${160 - shoulderWidth / 2 - 4} 110 Z`}
-              fill="#79563f"
-              stroke="#2e1d12"
-              strokeWidth="2"
-            />
-            {sleeves()}
-            {neckline()}
-            {isBlazerOrSuit && (
-              <g>
-                <path
-                  d="M 128 72 L 151 126 L 160 96 L 145 70 Z"
-                  fill="#5e402f"
-                  stroke="#2e1d12"
-                  strokeWidth="1.5"
-                />
-                <path
-                  d="M 192 72 L 169 126 L 160 96 L 175 70 Z"
-                  fill="#5e402f"
-                  stroke="#2e1d12"
-                  strokeWidth="1.5"
-                />
-                <path d="M 160 96 L 160 160" stroke="#2e1d12" strokeWidth="2" />
-                <circle cx="154" cy="129" r="2.8" fill="#d2b48c" />
-                <circle cx="154" cy="143" r="2.8" fill="#d2b48c" />
-                <path d="M 177 130 L 187 130" stroke="#d2b48c" strokeWidth="2" />
-              </g>
-            )}
-            {isBarong && (
-              <g>
-                <path
-                  d={`M ${160 - waistRx - 4} 145 L ${160 + waistRx + 4} 145 L ${160 + waistRx + 8} 205 Q 160 214 ${160 - waistRx - 8} 205 Z`}
-                  fill="#b78c66"
-                  fillOpacity=".55"
-                  stroke="#5f402d"
-                  strokeWidth="1.5"
-                />
-                <path d="M 160 72 L 160 190" stroke="#e5c6a5" strokeWidth="2" />
-                <path
-                  d="M 143 92 Q 160 110 177 92 M 140 116 Q 160 134 180 116 M 139 143 Q 160 158 181 143"
-                  fill="none"
-                  stroke="#e8c9a7"
-                  strokeWidth="2"
-                  strokeDasharray="3 3"
-                />
-                <circle cx="160" cy="83" r="2" fill="#f3dcc3" />
-                <circle cx="160" cy="94" r="2" fill="#f3dcc3" />
-              </g>
-            )}
-            {isVest && (
-              <g>
-                <path
-                  d="M 129 72 L 151 121 L 160 102 L 169 121 L 191 72 L 184 160 L 136 160 Z"
-                  fill="#634331"
-                  stroke="#2e1d12"
-                  strokeWidth="1.5"
-                />
-                <path d="M 160 102 L 160 160" stroke="#2e1d12" strokeWidth="1.5" />
-                {[122, 136, 150].map((cy) => (
-                  <circle key={cy} cx="155" cy={cy} r="2.5" fill="#d2b48c" />
-                ))}
-              </g>
-            )}
-            {['Open back', 'Backless', 'Low back'].includes(backStyle) && (
-              <path
-                d="M 142 85 Q 160 145 178 85 Z"
-                fill="#f7efe7"
-                stroke="#b18b6c"
-                strokeDasharray="4 4"
+      <div className="relative h-[460px] w-full overflow-hidden rounded-2xl bg-gradient-to-b from-[#f6efe7] to-[#e8dccf]">
+        {webgl ? (
+          <Canvas
+            camera={{ position: [0, height * 0.55, height * 2.15], fov: 30, near: 1, far: 2000 }}
+            dpr={[1, 2]}
+            frameloop="demand"
+          >
+            <hemisphereLight args={['#fffaf3', '#a8927f', 1.2]} />
+            <directionalLight position={[30, 90, 60]} intensity={1.6} />
+            <directionalLight position={[-40, 50, -50]} intensity={0.55} />
+            {fit.pieces.map((piece) => (
+              <PieceMesh
+                key={piece.key}
+                piece={piece}
+                lit={Boolean(activeField && piece.fields?.includes(activeField))}
               />
-            )}
-          </g>
+            ))}
+            <mesh position={[0, -0.35, 0]}>
+              <cylinderGeometry args={[fit.standRadius, fit.standRadius + 0.6, 0.7, 48]} />
+              <meshStandardMaterial color="#5c3d28" roughness={0.6} />
+            </mesh>
+            {dim && <DimMarker dim={dim} label={dimLabel} />}
+            <OrbitControls
+              ref={controls}
+              target={[0, height * 0.5, 0]}
+              enablePan={false}
+              minDistance={height * 0.6}
+              maxDistance={height * 3.5}
+              maxPolarAngle={Math.PI * 0.55}
+            />
+          </Canvas>
+        ) : (
+          <p className="grid h-full place-items-center px-6 text-center text-sm text-[#806f63]">
+            3D preview is not supported on this device. Measurements still save normally.
+          </p>
         )}
-        {(isBottom || isDress) &&
-          (isPants ? (
-            <path
-              d={`M ${160 - waistRx} 158 L ${160 + waistRx} 158 Q ${160 + hipsRx + 8} 210 ${160 + hipsRx / 2} 390 L 164 390 L 160 210 L 156 390 L ${160 - hipsRx / 2} 390 Q ${160 - hipsRx - 8} 210 ${160 - waistRx} 158 Z`}
-              fill="#79563f"
-              stroke="#2e1d12"
-              strokeWidth="2"
-            />
-          ) : (
-            <path
-              d={`M ${160 - waistRx - 2} 158 L ${160 + waistRx + 2} 158 Q ${160 + (silhouette === 'Ball gown' ? hipsRx + 45 : hipsRx + 12)} 230 ${160 + (silhouette === 'Ball gown' ? hipsRx + 60 : hipsRx + 28)} ${isDress ? 390 : 320} L ${160 - (silhouette === 'Ball gown' ? hipsRx + 60 : hipsRx + 28)} ${isDress ? 390 : 320} Q ${160 - hipsRx - 12} 230 ${160 - waistRx - 2} 158 Z`}
-              fill="#79563f"
-              stroke="#2e1d12"
-              strokeWidth="2"
-            />
+        {webgl && (
+          <div className="absolute inset-x-0 bottom-3 flex justify-center gap-2">
+            {(['front', 'side', 'back'] as const).map((side) => (
+              <button
+                key={side}
+                type="button"
+                onClick={() => view(side)}
+                className="rounded-full border border-[#d8c8b8] bg-white/90 px-3 py-1 text-xs font-semibold capitalize text-[#5f4a3d] shadow-sm hover:bg-white"
+              >
+                {side}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {fit.notes.length > 0 && (
+        <ul className="mt-3 space-y-1 text-xs text-[#a4432f]">
+          {fit.notes.map((note) => (
+            <li key={note}>• {note}</li>
           ))}
-      </svg>
-      <p className="mt-1 text-center text-[11px] leading-4 text-[#8b786c]">
-        {isFormalTop
-          ? `${state.garmentType} construction preview. Measurements remain the source of truth for cutting and fitting.`
-          : 'Visual guide only. Measurements remain the source of truth for cutting and fitting.'}
+        </ul>
+      )}
+      <p className="mt-2 text-center text-[11px] leading-4 text-[#8b786c]">
+        Drag to rotate, scroll or pinch to zoom. Click a measurement to see it on the mannequin.
+        Measurements remain the source of truth for cutting and fitting.
       </p>
     </div>
   )
